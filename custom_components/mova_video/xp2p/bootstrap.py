@@ -1,0 +1,854 @@
+"""Install the pinned Linux XP2P host runtime from verified upstream files."""
+
+from __future__ import annotations
+
+import base64
+import gzip
+import hashlib
+import io
+import json
+import os
+import platform
+import shutil
+import struct
+import tarfile
+import tempfile
+import threading
+import zipfile
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
+from typing import Protocol
+
+import requests
+
+from .common import VideoRuntimeError as DreameLawnMowerVideoRuntimeError
+from .probe import probe_xp2p_host_worker
+from .common import Xp2pHostAssets as DreameLawnMowerXp2pHostAssets
+from .worker_blob import (
+    WORKER_GZIP_BASE64,
+    WORKER_GZIP_SHA256,
+    WORKER_SHA256,
+)
+
+RUNTIME_LAYOUT_VERSION = "1"
+LARGE_PAGE_RUNTIME_LAYOUT_VERSION = "5"
+TENCENT_XP2P_VERSION = "2.4.50"
+TENCENT_XP2P_AAR_URL = (
+    "https://repo.maven.apache.org/maven2/com/tencent/iot/thirdparty/android/"
+    "xp2p-sdk/2.4.50/xp2p-sdk-2.4.50.aar"
+)
+TENCENT_XP2P_AAR_SHA256 = (
+    "7cbbacdb08861a16d5d9f1db71f2b04d7b9d01e8c71b20e51612100c2098dc37"
+)
+TENCENT_XP2P_LIBRARY_SHA256 = (
+    "30fafc9f7b15a29a64622200817248c636133e06affc40479084ca3d8d188649"
+)
+LARGE_PAGE_TENCENT_XP2P_VERSION = "2.4.71"
+LARGE_PAGE_TENCENT_XP2P_AAR_URL = (
+    "https://repo.maven.apache.org/maven2/com/tencent/iot/thirdparty/android/"
+    "xp2p-sdk/2.4.71/xp2p-sdk-2.4.71.aar"
+)
+LARGE_PAGE_TENCENT_XP2P_AAR_SHA256 = (
+    "d454b9e3d702aac6def6b2013f24c25ed632fa6b49bbaf4ad2b7e30af1330a3b"
+)
+LARGE_PAGE_TENCENT_XP2P_LIBRARY_SHA256 = (
+    "dd2e4aac077c5defd4cefcb4c1c094bb0f07b6ccb1cc28be0bb0c93b36121997"
+)
+LARGE_PAGE_TENCENT_CXX_LIBRARY_SHA256 = (
+    "f4e1e97c1943e60311e47e8b024d78f5b3b7229b3ccc65feb33af83d6025a670"
+)
+
+AOSP_RUNTIME_COMMIT = "070571b455076f77a01c7b07154a15e545d2b428"
+AOSP_RUNTIME_APEX_URL = (
+    "https://android.googlesource.com/platform/prebuilts/runtime/+/"
+    f"{AOSP_RUNTIME_COMMIT}/mainline/runtime/apex/"
+    "com.android.runtime-arm64.apex?format=TEXT"
+)
+AOSP_RUNTIME_APEX_SHA256 = (
+    "83bf0dce249728dae48149b80d28b48115c54adad95a352120d58a6ac669d1fc"
+)
+AOSP_RUNTIME_FILES = {
+    "bin/linker64": (
+        "bin/linker64",
+        "dc36b5feed26752e8f0758cff8d6dcdd63b1434c03d6692b58ba5c09399b1d16",
+        0o755,
+    ),
+    "lib64/bionic/libc.so": (
+        "lib/bionic/libc.so",
+        "9f1f93bbd186af5c40a93f6ca4425bfdce82b7f3b9c730e59bb5c7fa598593cf",
+        0o644,
+    ),
+    "lib64/bionic/libm.so": (
+        "lib/bionic/libm.so",
+        "74ec94e6aecf17ab8d56d2da151dd0756e21e8f53e567815cbf43c5266224c5b",
+        0o644,
+    ),
+    "lib64/bionic/libdl.so": (
+        "lib/bionic/libdl.so",
+        "7e215e0e68372d779492438d1a8e0e53e63154812d506af830e6c3dbcaeb0607",
+        0o644,
+    ),
+    "lib64/ld-android.so": (
+        "lib/ld-android.so",
+        "00dc38b8ce57d92b74c404fb40c37c50527fc558dd497bb484a950e926d63bff",
+        0o644,
+    ),
+    "lib64/libc++.so": (
+        "lib/libstdc++.so",
+        "ae87fa079200affdb3c534c794bcb213397e75120c5e126202b4644acad09629",
+        0o644,
+    ),
+}
+
+AOSP_VNDK_COMMIT = "1a059a5a203352d3e0c2fd3ccff5719cc37fc340"
+_AOSP_VNDK_BASE = (
+    "https://android.googlesource.com/platform/prebuilts/vndk/v31/+/"
+    f"{AOSP_VNDK_COMMIT}/arm64/arch-arm64-armv8-a/shared"
+)
+AOSP_VNDK_FILES = {
+    "lib/liblog.so": (
+        f"{_AOSP_VNDK_BASE}/llndk-stub/liblog.so?format=TEXT",
+        "e0099f476029f7443ba1829daa7100becd03ae08a3e3cd957034add9003c6eae",
+    ),
+    "lib/libz.so": (
+        f"{_AOSP_VNDK_BASE}/vndk-sp/libz.so?format=TEXT",
+        "68056ee2e644754f7693eb903b6fa51819b6655ff8a82a0c58e56aff3ff48e31",
+    ),
+}
+
+# Public Google SDK android-36 default ARM64 image, revision 2. The small
+# mirrored subset includes source provenance and the vendor's NOTICE file.
+LARGE_PAGE_ANDROID_RUNTIME_SOURCE = "android-36/default/arm64-v8a/revision-2"
+LARGE_PAGE_AOSP_BUNDLE_URL = (
+    "https://github.com/EvotecIT/homeassistant-dreamelawnmower/releases/download/"
+    "v0.2.153/aosp-android16-arm64-runtime-r02.tar.gz"
+)
+LARGE_PAGE_AOSP_BUNDLE_SHA256 = (
+    "4a1bc1aa00ffe8d67564e44d2d448634d3b008000e021648131f9eb7ab11d2a8"
+)
+LARGE_PAGE_AOSP_RUNTIME_FILES = {
+    "bin/linker64": (
+        "bin/linker64",
+        "30ed9bea070250e0b080c8a84d8398baab1b4eb95a90bfced82a94d5f235144b",
+        0o755,
+    ),
+    "lib/bionic/libc.so": (
+        "lib/bionic/libc.so",
+        "d3f8599b8b3f00101a31f94ac170ceb5875ee8446c201cb18382b2e02df84301",
+        0o644,
+    ),
+    "lib/bionic/libm.so": (
+        "lib/bionic/libm.so",
+        "44433149f62eeb8f09f38ecd3566683fac01a0f89de6ea6d15f6e4deca1ba4bc",
+        0o644,
+    ),
+    "lib/bionic/libdl.so": (
+        "lib/bionic/libdl.so",
+        "9f6447d910742a57b398a6a3f31746e02302ee9547da6d02757f001058a69df3",
+        0o644,
+    ),
+    "lib/ld-android.so": (
+        "lib/ld-android.so",
+        "39f9d2d397dc43df40d6d52432c15946bb2797d5907dbd0605cee28e26a43502",
+        0o644,
+    ),
+    "lib/libc++.so": (
+        "lib/libc++.so",
+        "2267f93b8b3c9d1967f1833d5f71c7312213c43bb291250cf772800763037fb9",
+        0o644,
+    ),
+    "lib/liblog.so": (
+        "lib/liblog.so",
+        "efcce90970ed85d61b9c05791ad76ff5f573035b1c0f7d2a3839063c7db5d1a0",
+        0o644,
+    ),
+    "lib/libz.so": (
+        "lib/libz.so",
+        "45f9234190e46eac2484944def75893cadbed4f751deaed674ed0341c7a229b1",
+        0o644,
+    ),
+}
+
+QEMU_VERSION = "7.2.0-1"
+QEMU_X86_64_URL = (
+    "https://github.com/multiarch/qemu-user-static/releases/download/"
+    "v7.2.0-1/x86_64_qemu-aarch64-static.tar.gz"
+)
+QEMU_X86_64_ARCHIVE_SHA256 = (
+    "b5dd968d522fd5d615d27c77fb1ca0847455d0b8badd7492647e7ab674339247"
+)
+QEMU_X86_64_BINARY_SHA256 = (
+    "dce64b2dc6b005485c7aa735a7ea39cb0006bf7e5badc28b324b2cd0c73d883f"
+)
+
+_TENCENT_AAR_LIBRARY = "jni/arm64-v8a/libiot_video_demo.so"
+_TENCENT_AAR_CXX_LIBRARY = "jni/arm64-v8a/libc++_shared.so"
+_MANIFEST_NAME = "runtime-manifest.json"
+_INSTALL_LOCK = threading.Lock()
+_EXT4_EXTENTS_FLAG = 0x00080000
+_EXTENT_MAGIC = 0xF30A
+
+
+class _HttpResponse(Protocol):
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def content(self) -> bytes: ...
+
+
+class _HttpClient(Protocol):
+    def get(
+        self, url: str, *, timeout: float, headers: Mapping[str, str] | None = None
+    ) -> _HttpResponse: ...
+
+
+def ensure_xp2p_host_runtime(
+    root: str | Path,
+    *,
+    machine: str | None = None,
+    page_size: int | None = None,
+    http_client: _HttpClient | None = None,
+    timeout: float = 60.0,
+    _cancelled: threading.Event | None = None,
+) -> DreameLawnMowerXp2pHostAssets:
+    """Return a complete, verified XP2P runtime, installing it when absent."""
+    architecture = _normalize_machine(machine or platform.machine())
+    if architecture not in {"aarch64", "x86_64"}:
+        raise DreameLawnMowerVideoRuntimeError(
+            "Managed XP2P video supports Linux aarch64 and x86_64 hosts; "
+            f"this host reports {machine or platform.machine()!r}."
+        )
+    host_page_size = _host_page_size() if page_size is None else page_size
+    use_large_page_runtime = architecture == "aarch64" and host_page_size > 4096
+    layout_version = (
+        LARGE_PAGE_RUNTIME_LAYOUT_VERSION
+        if use_large_page_runtime
+        else RUNTIME_LAYOUT_VERSION
+    )
+    root_path = Path(root)
+    runtime_path = root_path / f"runtime-v{layout_version}-{architecture}"
+    with _installation_owner(_cancelled):
+        assets = _validated_assets(
+            runtime_path,
+            architecture,
+            layout_version=layout_version,
+            use_large_page_runtime=use_large_page_runtime,
+        )
+        if assets is None:
+            root_path.mkdir(parents=True, exist_ok=True)
+            staging = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{runtime_path.name}-",
+                    dir=root_path,
+                )
+            )
+            try:
+                _install_runtime(
+                    staging,
+                    architecture,
+                    layout_version=layout_version,
+                    use_large_page_runtime=use_large_page_runtime,
+                    http_client=http_client or requests,
+                    timeout=timeout,
+                )
+                _check_install_active(_cancelled)
+                installed = _validated_assets(
+                    staging,
+                    architecture,
+                    layout_version=layout_version,
+                    use_large_page_runtime=use_large_page_runtime,
+                )
+                if installed is None:
+                    raise DreameLawnMowerVideoRuntimeError(
+                        "Installed XP2P host runtime failed integrity validation."
+                    )
+                _check_install_active(_cancelled)
+                if runtime_path.exists():
+                    _remove_runtime_path(runtime_path, root_path)
+                staging.replace(runtime_path)
+            except Exception:
+                _remove_runtime_path(staging, root_path)
+                raise
+            assets = _validated_assets(
+                runtime_path,
+                architecture,
+                layout_version=layout_version,
+                use_large_page_runtime=use_large_page_runtime,
+            )
+            if assets is None:
+                raise DreameLawnMowerVideoRuntimeError(
+                    "XP2P host runtime disappeared after installation."
+                )
+    _check_install_active(_cancelled)
+    return _with_startup_probe(assets)
+
+
+def _check_install_active(cancelled: threading.Event | None) -> None:
+    if cancelled is not None and cancelled.is_set():
+        raise DreameLawnMowerVideoRuntimeError("Runtime installation was cancelled.")
+
+
+@contextmanager
+def _installation_owner(cancelled: threading.Event | None) -> Iterator[None]:
+    while True:
+        _check_install_active(cancelled)
+        if _INSTALL_LOCK.acquire(timeout=0.05):
+            break
+    try:
+        _check_install_active(cancelled)
+        yield
+    finally:
+        _INSTALL_LOCK.release()
+
+
+def _host_page_size() -> int:
+    """Return the Linux host page size, or zero when it cannot be read."""
+    try:
+        return int(os.sysconf("SC_PAGE_SIZE"))
+    except (AttributeError, OSError, ValueError):
+        return 0
+
+
+def _with_startup_probe(
+    assets: DreameLawnMowerXp2pHostAssets,
+) -> DreameLawnMowerXp2pHostAssets:
+    """Attach one safe worker-launch result to the prepared runtime."""
+    return replace(
+        assets,
+        startup_probe=probe_xp2p_host_worker(
+            assets.command(),
+            assets.environment(),
+            library_path=str(assets.library_path),
+        ),
+    )
+
+
+def _install_runtime(
+    target: Path,
+    architecture: str,
+    *,
+    layout_version: str = RUNTIME_LAYOUT_VERSION,
+    use_large_page_runtime: bool = False,
+    http_client: _HttpClient,
+    timeout: float,
+) -> None:
+    worker_gzip = base64.b64decode(WORKER_GZIP_BASE64, validate=True)
+    _require_hash(worker_gzip, WORKER_GZIP_SHA256, "embedded XP2P worker")
+    worker = gzip.decompress(worker_gzip)
+    _write_verified(
+        target / "bin/dreame-xp2p-host-runner",
+        worker,
+        WORKER_SHA256,
+        mode=0o755,
+    )
+
+    tencent_version = (
+        LARGE_PAGE_TENCENT_XP2P_VERSION
+        if use_large_page_runtime
+        else TENCENT_XP2P_VERSION
+    )
+    aar = _download_verified(
+        http_client,
+        (
+            LARGE_PAGE_TENCENT_XP2P_AAR_URL
+            if use_large_page_runtime
+            else TENCENT_XP2P_AAR_URL
+        ),
+        (
+            LARGE_PAGE_TENCENT_XP2P_AAR_SHA256
+            if use_large_page_runtime
+            else TENCENT_XP2P_AAR_SHA256
+        ),
+        timeout=timeout,
+        label="Tencent XP2P SDK",
+    )
+    aar_libraries = {
+        _TENCENT_AAR_LIBRARY: (
+            "lib/libiot_video_demo.so",
+            (
+                LARGE_PAGE_TENCENT_XP2P_LIBRARY_SHA256
+                if use_large_page_runtime
+                else TENCENT_XP2P_LIBRARY_SHA256
+            ),
+        ),
+    }
+    if use_large_page_runtime:
+        aar_libraries[_TENCENT_AAR_CXX_LIBRARY] = (
+            "lib/libc++_shared.so",
+            LARGE_PAGE_TENCENT_CXX_LIBRARY_SHA256,
+        )
+    try:
+        with zipfile.ZipFile(io.BytesIO(aar)) as archive:
+            extracted_libraries = {
+                relative_target: (
+                    archive.read(source),
+                    expected_hash,
+                )
+                for source, (relative_target, expected_hash) in (aar_libraries.items())
+            }
+    except (KeyError, zipfile.BadZipFile) as err:
+        raise DreameLawnMowerVideoRuntimeError(
+            "Tencent XP2P SDK archive did not contain its aarch64 libraries."
+        ) from err
+    for relative_target, (content, expected_hash) in extracted_libraries.items():
+        _write_verified(target / relative_target, content, expected_hash)
+
+    if use_large_page_runtime:
+        _install_large_page_aosp_runtime(
+            target,
+            http_client=http_client,
+            timeout=timeout,
+        )
+    else:
+        _install_legacy_aosp_runtime(
+            target,
+            http_client=http_client,
+            timeout=timeout,
+        )
+
+    if architecture == "x86_64":
+        qemu_archive = _download_verified(
+            http_client,
+            QEMU_X86_64_URL,
+            QEMU_X86_64_ARCHIVE_SHA256,
+            timeout=timeout,
+            label="qemu-aarch64",
+        )
+        try:
+            with tarfile.open(fileobj=io.BytesIO(qemu_archive), mode="r:gz") as archive:
+                member = archive.getmember("qemu-aarch64-static")
+                stream = archive.extractfile(member)
+                qemu = stream.read() if stream is not None else b""
+        except (KeyError, tarfile.TarError) as err:
+            raise DreameLawnMowerVideoRuntimeError(
+                "qemu-aarch64 archive was malformed."
+            ) from err
+        _write_verified(
+            target / "bin/qemu-aarch64-static",
+            qemu,
+            QEMU_X86_64_BINARY_SHA256,
+            mode=0o755,
+        )
+
+    manifest = {
+        "layout_version": layout_version,
+        "architecture": architecture,
+        "tencent_xp2p_version": tencent_version,
+        "aosp_runtime_commit": (
+            None if use_large_page_runtime else AOSP_RUNTIME_COMMIT
+        ),
+        "aosp_vndk_commit": None if use_large_page_runtime else AOSP_VNDK_COMMIT,
+        "android_runtime_source": (
+            LARGE_PAGE_ANDROID_RUNTIME_SOURCE if use_large_page_runtime else None
+        ),
+        "qemu_version": QEMU_VERSION if architecture == "x86_64" else None,
+        "files": _expected_installed_hashes(
+            architecture,
+            use_large_page_runtime=use_large_page_runtime,
+        ),
+    }
+    manifest_path = target / _MANIFEST_NAME
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _install_legacy_aosp_runtime(
+    target: Path,
+    *,
+    http_client: _HttpClient,
+    timeout: float,
+) -> None:
+    apex_encoded = _download_verified(
+        http_client,
+        AOSP_RUNTIME_APEX_URL,
+        None,
+        timeout=timeout,
+        label="AOSP Bionic runtime",
+    )
+    try:
+        apex = _decode_gitiles(apex_encoded)
+    except ValueError as err:
+        raise DreameLawnMowerVideoRuntimeError(
+            "AOSP Bionic runtime download was not valid Gitiles base64."
+        ) from err
+    _require_hash(apex, AOSP_RUNTIME_APEX_SHA256, "AOSP Bionic runtime")
+    _install_apex_files(target, apex, AOSP_RUNTIME_FILES)
+
+    for relative_target, (url, expected_hash) in AOSP_VNDK_FILES.items():
+        encoded = _download_verified(
+            http_client,
+            url,
+            None,
+            timeout=timeout,
+            label=Path(relative_target).name,
+        )
+        try:
+            content = _decode_gitiles(encoded)
+        except ValueError as err:
+            raise DreameLawnMowerVideoRuntimeError(
+                f"AOSP {Path(relative_target).name} was not valid Gitiles base64."
+            ) from err
+        _write_verified(target / relative_target, content, expected_hash)
+
+
+def _install_large_page_aosp_runtime(
+    target: Path,
+    *,
+    http_client: _HttpClient,
+    timeout: float,
+) -> None:
+    bundle = _download_verified(
+        http_client,
+        LARGE_PAGE_AOSP_BUNDLE_URL,
+        LARGE_PAGE_AOSP_BUNDLE_SHA256,
+        timeout=timeout,
+        label="large-page AOSP runtime bundle",
+    )
+    try:
+        with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as archive:
+            for source, (relative_target, expected_hash, mode) in (
+                LARGE_PAGE_AOSP_RUNTIME_FILES.items()
+            ):
+                member = archive.getmember(source)
+                if not member.isfile():
+                    raise DreameLawnMowerVideoRuntimeError(
+                        f"AOSP runtime bundle member was not a regular file: {source}."
+                    )
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise DreameLawnMowerVideoRuntimeError(
+                        f"AOSP runtime bundle omitted {source}."
+                    )
+                # Read only explicitly pinned members; never extract archive paths.
+                _write_verified(
+                    target / relative_target,
+                    stream.read(),
+                    expected_hash,
+                    mode=mode,
+                )
+    except (KeyError, tarfile.TarError, OSError) as err:
+        raise DreameLawnMowerVideoRuntimeError(
+            "AOSP runtime bundle was malformed or incomplete."
+        ) from err
+
+
+def _install_apex_files(
+    target: Path,
+    apex: bytes,
+    files: Mapping[str, tuple[str, str, int]],
+) -> None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(apex)) as archive:
+            filesystem_image = archive.read("apex_payload.img")
+    except (KeyError, zipfile.BadZipFile) as err:
+        raise DreameLawnMowerVideoRuntimeError(
+            "AOSP Bionic APEX did not contain apex_payload.img."
+        ) from err
+    filesystem = _ExtFilesystem(filesystem_image)
+    for source, (relative_target, expected_hash, mode) in files.items():
+        _write_verified(
+            target / relative_target,
+            filesystem.read_file(source),
+            expected_hash,
+            mode=mode,
+        )
+
+
+def _validated_assets(
+    runtime_path: Path,
+    architecture: str,
+    *,
+    layout_version: str = RUNTIME_LAYOUT_VERSION,
+    use_large_page_runtime: bool = False,
+) -> DreameLawnMowerXp2pHostAssets | None:
+    manifest_path = runtime_path / _MANIFEST_NAME
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, Mapping):
+        return None
+    if manifest.get("layout_version") != layout_version:
+        return None
+    if manifest.get("architecture") != architecture:
+        return None
+    expected = _expected_installed_hashes(
+        architecture,
+        use_large_page_runtime=use_large_page_runtime,
+    )
+    if manifest.get("files") != expected:
+        return None
+    for relative, expected_hash in expected.items():
+        path = runtime_path / relative
+        try:
+            if _file_hash(path) != expected_hash:
+                return None
+        except OSError:
+            return None
+    binary = runtime_path / "bin"
+    library = runtime_path / "lib"
+    assets = DreameLawnMowerXp2pHostAssets(
+        worker_path=binary / "dreame-xp2p-host-runner",
+        linker_path=binary / "linker64",
+        library_path=library / "libiot_video_demo.so",
+        library_search_paths=(library, library / "bionic"),
+        qemu_path=(
+            binary / "qemu-aarch64-static" if architecture == "x86_64" else None
+        ),
+    )
+    try:
+        assets.validate()
+    except DreameLawnMowerVideoRuntimeError:
+        return None
+    return assets
+
+
+def _expected_installed_hashes(
+    architecture: str,
+    *,
+    use_large_page_runtime: bool = False,
+) -> dict[str, str]:
+    runtime_files = (
+        LARGE_PAGE_AOSP_RUNTIME_FILES if use_large_page_runtime else AOSP_RUNTIME_FILES
+    )
+    system_hashes = (
+        {} if use_large_page_runtime else {
+            relative_target: expected_hash
+            for relative_target, (_url, expected_hash) in AOSP_VNDK_FILES.items()
+        }
+    )
+    files = {
+        "bin/dreame-xp2p-host-runner": WORKER_SHA256,
+        "lib/libiot_video_demo.so": (
+            LARGE_PAGE_TENCENT_XP2P_LIBRARY_SHA256
+            if use_large_page_runtime
+            else TENCENT_XP2P_LIBRARY_SHA256
+        ),
+        **{
+            relative_target: expected_hash
+            for relative_target, expected_hash, _mode in runtime_files.values()
+        },
+        **system_hashes,
+    }
+    if use_large_page_runtime:
+        files["lib/libc++_shared.so"] = LARGE_PAGE_TENCENT_CXX_LIBRARY_SHA256
+    if architecture == "x86_64":
+        files["bin/qemu-aarch64-static"] = QEMU_X86_64_BINARY_SHA256
+    return dict(sorted(files.items()))
+
+
+def _download_verified(
+    client: _HttpClient,
+    url: str,
+    expected_hash: str | None,
+    *,
+    timeout: float,
+    label: str,
+) -> bytes:
+    try:
+        response = client.get(url, timeout=timeout)
+    except requests.RequestException as err:
+        raise DreameLawnMowerVideoRuntimeError(f"Could not download {label}.") from err
+    if response.status_code != 200:
+        raise DreameLawnMowerVideoRuntimeError(
+            f"Could not download {label}; HTTP {response.status_code}."
+        )
+    content = bytes(response.content)
+    if expected_hash is not None:
+        _require_hash(content, expected_hash, label)
+    return content
+
+
+def _write_verified(
+    path: Path,
+    content: bytes,
+    expected_hash: str,
+    *,
+    mode: int = 0o644,
+) -> None:
+    _require_hash(content, expected_hash, path.name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    path.chmod(mode)
+
+
+def _require_hash(content: bytes, expected_hash: str, label: str) -> None:
+    actual = hashlib.sha256(content).hexdigest()
+    if actual.casefold() != expected_hash.casefold():
+        raise DreameLawnMowerVideoRuntimeError(f"{label} failed SHA-256 verification.")
+
+
+def _decode_gitiles(content: bytes) -> bytes:
+    return base64.b64decode(b"".join(content.split()), validate=True)
+
+
+def _file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _normalize_machine(value: str) -> str:
+    machine = value.strip().casefold()
+    if machine in {"amd64", "x64", "x86_64"}:
+        return "x86_64"
+    if machine in {"aarch64", "arm64"}:
+        return "aarch64"
+    return machine
+
+
+def _remove_runtime_path(path: Path, root: Path) -> None:
+    resolved_root = root.resolve()
+    resolved_parent = path.parent.resolve()
+    if (
+        resolved_parent != resolved_root
+        and resolved_root not in resolved_parent.parents
+    ):
+        raise DreameLawnMowerVideoRuntimeError(
+            "Refusing to remove XP2P runtime outside its configured root."
+        )
+    if path.is_symlink() or not path.is_dir():
+        path.unlink(missing_ok=True)
+        return
+    shutil.rmtree(path, ignore_errors=True)
+
+
+class _ExtFilesystem:
+    """Small read-only ext2/4 extent reader for the pinned AOSP APEX."""
+
+    def __init__(self, image: bytes) -> None:
+        self.image = image
+        if len(image) < 2048:
+            raise DreameLawnMowerVideoRuntimeError(
+                "AOSP Bionic filesystem image was truncated."
+            )
+        superblock = memoryview(image)[1024:2048]
+        if struct.unpack_from("<H", superblock, 56)[0] != 0xEF53:
+            raise DreameLawnMowerVideoRuntimeError(
+                "AOSP Bionic payload was not an ext filesystem."
+            )
+        self.block_size = 1024 << struct.unpack_from("<I", superblock, 24)[0]
+        self.blocks_per_group = struct.unpack_from("<I", superblock, 32)[0]
+        self.inodes_per_group = struct.unpack_from("<I", superblock, 40)[0]
+        self.first_data_block = struct.unpack_from("<I", superblock, 20)[0]
+        self.inode_size = struct.unpack_from("<H", superblock, 88)[0] or 128
+        descriptor_size = struct.unpack_from("<H", superblock, 254)[0]
+        self.descriptor_size = max(descriptor_size, 32)
+        self.descriptor_table = (self.first_data_block + 1) * self.block_size
+
+    def read_file(self, path: str | PurePosixPath) -> bytes:
+        """Read one absolute or root-relative regular file."""
+        inode_number = 2
+        parts = PurePosixPath(path).parts
+        for part in parts:
+            if part in {"/", "", "."}:
+                continue
+            entries = self._directory_entries(inode_number)
+            try:
+                inode_number = entries[part]
+            except KeyError as err:
+                raise DreameLawnMowerVideoRuntimeError(
+                    f"AOSP Bionic payload omitted {path}."
+                ) from err
+        inode = self._inode(inode_number)
+        mode = struct.unpack_from("<H", inode, 0)[0] & 0xF000
+        if mode != 0x8000:
+            raise DreameLawnMowerVideoRuntimeError(
+                f"AOSP Bionic payload path was not a regular file: {path}."
+            )
+        return self._inode_data(inode)
+
+    def _directory_entries(self, inode_number: int) -> dict[str, int]:
+        inode = self._inode(inode_number)
+        data = self._inode_data(inode)
+        entries: dict[str, int] = {}
+        offset = 0
+        while offset + 8 <= len(data):
+            child, record_length = struct.unpack_from("<IH", data, offset)
+            name_length = data[offset + 6]
+            if record_length < 8 or offset + record_length > len(data):
+                break
+            if child and name_length <= record_length - 8:
+                name = data[offset + 8 : offset + 8 + name_length].decode(
+                    "utf-8", "surrogateescape"
+                )
+                entries[name] = child
+            offset += record_length
+        return entries
+
+    def _inode(self, inode_number: int) -> memoryview:
+        if inode_number < 1:
+            raise DreameLawnMowerVideoRuntimeError("Invalid ext inode number.")
+        index = inode_number - 1
+        group = index // self.inodes_per_group
+        group_index = index % self.inodes_per_group
+        descriptor_offset = self.descriptor_table + group * self.descriptor_size
+        descriptor = memoryview(self.image)[
+            descriptor_offset : descriptor_offset + self.descriptor_size
+        ]
+        table_low = struct.unpack_from("<I", descriptor, 8)[0]
+        table_high = (
+            struct.unpack_from("<I", descriptor, 40)[0]
+            if self.descriptor_size >= 64
+            else 0
+        )
+        table_block = table_low | (table_high << 32)
+        inode_offset = table_block * self.block_size + group_index * self.inode_size
+        inode = memoryview(self.image)[inode_offset : inode_offset + self.inode_size]
+        if len(inode) != self.inode_size:
+            raise DreameLawnMowerVideoRuntimeError("Truncated ext inode table.")
+        return inode
+
+    def _inode_data(self, inode: memoryview) -> bytes:
+        size = struct.unpack_from("<I", inode, 4)[0]
+        if len(inode) >= 112:
+            size |= struct.unpack_from("<I", inode, 108)[0] << 32
+        flags = struct.unpack_from("<I", inode, 32)[0]
+        if not flags & _EXT4_EXTENTS_FLAG:
+            raise DreameLawnMowerVideoRuntimeError(
+                "AOSP Bionic payload used unsupported non-extent storage."
+            )
+        result = bytearray(size)
+        for logical, physical, block_count in self._extents(inode[40:100]):
+            source = physical * self.block_size
+            destination = logical * self.block_size
+            length = min(block_count * self.block_size, max(size - destination, 0))
+            if length <= 0 or source + length > len(self.image):
+                continue
+            result[destination : destination + length] = self.image[
+                source : source + length
+            ]
+        return bytes(result)
+
+    def _extents(self, node: memoryview) -> list[tuple[int, int, int]]:
+        magic, entries, maximum, depth = struct.unpack_from("<HHHH", node, 0)
+        if magic != _EXTENT_MAGIC or entries > maximum:
+            raise DreameLawnMowerVideoRuntimeError("Invalid ext extent tree.")
+        result: list[tuple[int, int, int]] = []
+        if depth == 0:
+            for index in range(entries):
+                offset = 12 + index * 12
+                logical, length, start_high, start_low = struct.unpack_from(
+                    "<IHHI", node, offset
+                )
+                block_count = length & 0x7FFF
+                physical = start_low | (start_high << 32)
+                result.append((logical, physical, block_count))
+            return result
+        for index in range(entries):
+            offset = 12 + index * 12
+            _logical, leaf_low, leaf_high, _unused = struct.unpack_from(
+                "<IIHH", node, offset
+            )
+            leaf = leaf_low | (leaf_high << 32)
+            start = leaf * self.block_size
+            child = memoryview(self.image)[start : start + self.block_size]
+            result.extend(self._extents(child))
+        return result

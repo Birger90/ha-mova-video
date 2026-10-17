@@ -1,0 +1,13 @@
+{
+  "domain": "mova_video",
+  "name": "MOVA Video",
+  "after_dependencies": ["dreame_vacuum", "stream"],
+  "codeowners": ["@Birger90"],
+  "config_flow": true,
+  "dependencies": ["ffmpeg", "http"],
+  "documentation": "https://github.com/Birger90/ha-mova-video",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/Birger90/ha-mova-video/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

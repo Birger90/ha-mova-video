@@ -1,0 +1,7 @@
+diagnose:
+  fields:
+    runtime:
+      required: false
+      default: false
+      selector:
+        boolean:

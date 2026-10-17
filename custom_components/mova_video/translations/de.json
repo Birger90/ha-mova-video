@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MOVA Video",
+        "description": "Wähle den Roboter aus der Dreame-Vacuum-Integration.",
+        "data": { "dreame_entry_id": "Roboter" }
+      }
+    },
+    "abort": {
+      "no_dreame": "Richte zuerst die Dreame-Vacuum-Integration ein.",
+      "already_configured": "Dieser Roboter hat bereits Live-Video."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": { "device_handshake": "Start-/Stopp-Befehl der App an den Roboter senden" }
+      }
+    }
+  },
+  "entity": {
+    "camera": { "live_video": { "name": "Live-Video" } }
+  },
+  "services": {
+    "diagnose": {
+      "name": "Diagnose",
+      "description": "Prüft die Video-Bereitstellung in der Cloud, ohne Geheimnisse anzuzeigen.",
+      "fields": {
+        "runtime": { "name": "Laufzeit vorbereiten", "description": "Auch die XP2P-Laufzeit herunterladen und prüfen." }
+      }
+    }
+  }
+}

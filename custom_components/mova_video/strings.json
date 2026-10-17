@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MOVA Video",
+        "description": "Choose the robot from the Dreame Vacuum integration.",
+        "data": { "dreame_entry_id": "Robot" }
+      }
+    },
+    "abort": {
+      "no_dreame": "Set up the Dreame Vacuum integration first.",
+      "already_configured": "This robot already has live video."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": { "device_handshake": "Send the app's start/stop monitor command to the robot" }
+      }
+    }
+  },
+  "entity": {
+    "camera": { "live_video": { "name": "Live video" } }
+  },
+  "services": {
+    "diagnose": {
+      "name": "Diagnose",
+      "description": "Checks cloud video provisioning without revealing any secrets.",
+      "fields": {
+        "runtime": { "name": "Prepare runtime", "description": "Also download and verify the XP2P runtime." }
+      }
+    }
+  }
+}
