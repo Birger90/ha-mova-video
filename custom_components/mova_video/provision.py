@@ -58,6 +58,14 @@ def find_text(value: Any, keys: Sequence[str]) -> str | None:
     return None
 
 
+def _message(response: Any) -> str | None:
+    """Vendor error text of a failed call (an error description, not a secret)."""
+    if isinstance(response, Mapping) and response.get("code") not in (0, None):
+        msg = response.get("msg") or response.get("message")
+        return str(msg)[:120] if msg else None
+    return None
+
+
 def _unwrap(response: Any) -> tuple[Any, Any]:
     """Return (data, code); data is the raw response if it is not a success envelope."""
     if isinstance(response, Mapping):
@@ -93,7 +101,7 @@ async def async_provision(bridge: VacuumBridge) -> tuple[StreamRequest, dict[str
 
     raw, code = _unwrap(await bridge.async_tx_call("access_token", {"os": 1}))
     token = find_text(raw, TOKEN_KEYS)
-    report["access_token"] = {"code": code, "token_present": bool(token), "shape": _shape(raw)}
+    report["access_token"] = {"code": code, "msg": _message(raw), "token_present": bool(token), "shape": _shape(raw)}
 
     base: dict[str, Any] = {"did": did, "os": 1}
     if token:
@@ -110,13 +118,13 @@ async def async_provision(bridge: VacuumBridge) -> tuple[StreamRequest, dict[str
     for name, keys in IDENTITY_KEYS.items():
         if (value := find_text(identity_raw, keys)) is not None:
             fields[name] = value
-    report["identity"] = {"code": code, "fields": sorted(fields), "shape": _shape(identity_raw)}
+    report["identity"] = {"code": code, "msg": _message(identity_raw), "fields": sorted(fields), "shape": _shape(identity_raw)}
 
     p2p_raw, code = _unwrap(await bridge.async_tx_call("p2p", dict(base)))
     for name, keys in P2P_KEYS.items():
         if name not in fields and (value := find_text(p2p_raw, keys)) is not None:
             fields[name] = value
-    report["p2p"] = {"code": code, "p2p_info_present": "p2p_info" in fields, "shape": _shape(p2p_raw)}
+    report["p2p"] = {"code": code, "msg": _message(p2p_raw), "p2p_info_present": "p2p_info" in fields, "shape": _shape(p2p_raw)}
 
     if not (fields.get("app_id") and fields.get("app_secret")):
         app_id, app_secret = derive_tx_video_app_credentials(fields.get("secret_id"), fields.get("secret_key"))
@@ -131,7 +139,7 @@ async def async_provision(bridge: VacuumBridge) -> tuple[StreamRequest, dict[str
     if missing:
         try:
             elig_raw, code = _unwrap(await bridge.async_tx_call("eligibility", dict(base)))
-            report["eligibility"] = {"code": code, "value": find_text(elig_raw, ELIGIBILITY_KEYS), "shape": _shape(elig_raw)}
+            report["eligibility"] = {"code": code, "msg": _message(elig_raw), "value": find_text(elig_raw, ELIGIBILITY_KEYS), "shape": _shape(elig_raw)}
         except Exception as err:  # noqa: BLE001 - diagnostic only
             report["eligibility"] = {"error": type(err).__name__}
         raise ProvisioningError("Cloud video provisioning is incomplete: missing " + ", ".join(missing), report)
