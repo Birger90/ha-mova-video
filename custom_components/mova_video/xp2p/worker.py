@@ -311,8 +311,14 @@ def _drain(stream: IO[bytes] | None, tail: list[bytes]) -> threading.Thread | No
     return thread
 
 
-def start_stream(assets: Xp2pHostAssets, req: StreamRequest) -> StreamSession:
-    """Launch the worker and return the local FLV URL. Blocks up to several minutes."""
+def start_stream(
+    assets: Xp2pHostAssets, req: StreamRequest, tail: list[bytes] | None = None
+) -> StreamSession:
+    """Launch the worker and return the local FLV URL. Blocks up to several minutes.
+
+    ``tail`` (optional) receives the worker's stderr lines while it starts, so the caller
+    can show progress; it is raw output and must be redacted before display.
+    """
     assets.validate()
     cfg = fetch_device_config(req)
     stun_file = _write_stun_file(cfg)
@@ -328,7 +334,8 @@ def start_stream(assets: Xp2pHostAssets, req: StreamRequest) -> StreamSession:
         stun_file.unlink(missing_ok=True)
         raise VideoRuntimeError(f"Could not start the XP2P worker: {err}") from err
 
-    tail: list[bytes] = []
+    if tail is None:
+        tail = []
     drain = _drain(process.stderr, tail)
     session = StreamSession("", process, stun_file, drain, stderr_tail=tail)
     try:

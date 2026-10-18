@@ -9,5 +9,5 @@
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/Birger90/ha-mova-video/issues",
   "requirements": [],
-  "version": "0.1.1"
+  "version": "0.1.2"
 }
