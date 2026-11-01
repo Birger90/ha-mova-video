@@ -117,7 +117,7 @@ class VideoManager:
             )
             if self.device_handshake:
                 self._set_phase("device_handshake")
-                await self._async_handshake("start")
+                await self._async_handshake("start", request.channel_id)
             self._set_phase("xp2p_connect")
             self._worker_tail = []
             session = await self.hass.async_add_executor_job(start_stream, assets, request, self._worker_tail)
@@ -166,7 +166,7 @@ class VideoManager:
     # felixsteghofer/dreame-live-camera (manager.py): client session id, STREAM_CODE open,
     # VIDEO_VENDOR, monitor start, on refusal PIN verify (sha256) and one retry, keep-alive
     # every 10 s, monitor end. That project targets the Aliyun provider; for Tencent the
-    # provider-specific monitor parameters (token/channelId there) are left out - unverified.
+    # Aliyun-specific token/channelId there are replaced by the values the MOVA app uses for Tencent.
 
     async def _cam(self, step: str, action: str, prop: str, value: dict[str, Any]) -> Any:
         try:
@@ -182,14 +182,18 @@ class VideoManager:
     def _ok(result: Any) -> bool:
         return isinstance(result, dict) and result.get("code") == 0
 
-    async def _async_handshake(self, oper_type: str) -> None:
+    async def _async_handshake(self, oper_type: str, channel_id: str = "") -> None:
         if oper_type != "start":
             return
         self.handshake_log = []
         self._cam_session = hashlib.md5(f"{self.bridge.uuid() or uuid.uuid4().hex}_{int(time.time() * 1000)}".encode()).hexdigest()
         await self._cam("open", "STREAM_CODE", "STREAM_CODE", {"open": True})
         await self._cam("vendor", "VIDEO_VENDOR", "STREAM_VENDOR", {})
+        # The MOVA app starts the Tencent monitor with token "tx" and the XP2P device id as
+        # channelId (seen in the robot's 10001.1 status while the app was streaming).
         monitor = {"operType": "monitor", "operation": "start"}
+        if channel_id:
+            monitor = {"token": "tx", "channelId": channel_id, **monitor}
         result = await self._cam("monitor_start", "STREAM_VIDEO", "STREAM_STATUS", monitor)
         if not self._ok(result) and self.pin:
             verified = await self._cam(
