@@ -78,6 +78,11 @@ class VacuumBridge:
         # authentication headers added by dreame_vacuum's request().
         return await self.hass.async_add_executor_job(cloud.request, url, body)
 
+    async def async_cloud_properties(self, keys: str) -> Any:
+        """Read device properties from the cloud cache, e.g. "10001.1,10001.11"."""
+        cloud = self.cloud()
+        return await self.hass.async_add_executor_job(cloud.get_properties, keys)
+
     def uuid(self) -> str:
         return str(getattr(self.cloud(), "_uuid", "") or "")
 

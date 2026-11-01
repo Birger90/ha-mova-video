@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 import uuid
@@ -218,6 +219,42 @@ class VideoManager:
 
     # ---------- diagnostics ----------
 
+    # Values of these keys are short protocol words and are shown as-is; every other value is
+    # reduced to its type and length so that tokens or ids never appear in the output.
+    _PLAIN_KEYS = {"operType", "operation", "status", "result", "area", "videoStatus", "vendor", "type", "code"}
+
+    @classmethod
+    def _mask(cls, value: Any, key: str | None = None) -> Any:
+        if isinstance(value, dict):
+            return {k: cls._mask(v, k) for k, v in value.items()}
+        if isinstance(value, list):
+            return [cls._mask(v, key) for v in value[:10]]
+        if value is None or isinstance(value, bool):
+            return value
+        if key in cls._PLAIN_KEYS and len(str(value)) <= 24:
+            return value
+        if key == "token" and len(str(value)) <= 8:
+            return value  # short provider markers such as "alify"; real tokens are longer
+        return f"{type(value).__name__}[{len(str(value))}]"
+
+    async def _async_camera_status(self) -> Any:
+        """Raw camera status (10001.1) and video vendor (10001.11) as the robot reports them, masked."""
+        try:
+            rows = await self.bridge.async_cloud_properties("10001.1,10001.11")
+        except Exception as err:  # noqa: BLE001
+            return {"error": type(err).__name__}
+        out: dict[str, Any] = {}
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            value = row.get("value")
+            try:
+                parsed = json.loads(value) if isinstance(value, str) and value[:1] in "{[" else value
+            except ValueError:
+                parsed = value
+            out[str(row.get("key"))] = self._mask(parsed)
+        return out
+
     def worker_status(self) -> dict[str, Any]:
         """Value-free progress of the current or last start (worker output is redacted)."""
         return {
@@ -257,6 +294,7 @@ class VideoManager:
         result["flv_path"] = self.flv_path or "default"
         result["pin_configured"] = bool(self.pin)
         result["handshake"] = list(self.handshake_log)
+        result["camera_status"] = await self._async_camera_status()
         result["relay"] = {
             "active": self.relay.active,
             "last_error": self.relay.last_error,
