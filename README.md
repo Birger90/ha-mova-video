@@ -4,7 +4,7 @@ Live-Video der Roboterkamera in Home Assistant für MOVA-/Dreame-Saugroboter, de
 
 Ergänzung zu [Tasshack/dreame-vacuum](https://github.com/Tasshack/dreame-vacuum): Die Integration nutzt dessen bestehende Cloud-Anmeldung und speichert **keine eigenen Zugangsdaten**.
 
-> Status: experimentell (0.1.0). Getestet bisher nur offline (Verteiler, Provisionierung mit Testdaten).
+> Status: experimentell. Live-Video funktioniert mit MOVA Z70 Ultra Roller Complete (mova.vacuum.r5766h) auf Raspberry Pi 4, Home Assistant 2026.10 (Stand 0.1.7, 01.11.2026). Andere Modelle ungetestet.
 
 ## Funktionsweise
 
