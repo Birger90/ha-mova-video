@@ -15,7 +15,7 @@
   "options": {
     "step": {
       "init": {
-        "data": { "device_handshake": "Start-/Stopp-Befehl der App an den Roboter senden", "flv_path": "FLV-Pfad, der beim Roboter angefragt wird (Experten-Einstellung)" }
+        "data": { "device_handshake": "Start-/Stopp-Befehl der App an den Roboter senden", "flv_path": "FLV-Pfad, der beim Roboter angefragt wird (Experten-Einstellung)", "pin": "Kamera-PIN (leer lassen = unverändert)" }
       }
     }
   },

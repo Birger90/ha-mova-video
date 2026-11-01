@@ -15,7 +15,7 @@
   "options": {
     "step": {
       "init": {
-        "data": { "device_handshake": "Send the app's start/stop monitor command to the robot", "flv_path": "FLV path requested from the robot (expert setting)" }
+        "data": { "device_handshake": "Send the app's start/stop monitor command to the robot", "flv_path": "FLV path requested from the robot (expert setting)", "pin": "Camera PIN (leave empty to keep)" }
       }
     }
   },

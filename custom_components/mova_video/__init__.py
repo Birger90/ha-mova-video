@@ -60,6 +60,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bridge,
         device_handshake=entry.options.get(CONF_HANDSHAKE, True),
         flv_path=entry.options.get("flv_path") or None,
+        pin=entry.options.get("pin") or None,
     )
     await manager.async_setup()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = manager

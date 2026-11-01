@@ -78,6 +78,29 @@ class VacuumBridge:
         # authentication headers added by dreame_vacuum's request().
         return await self.hass.async_add_executor_job(cloud.request, url, body)
 
+    def uuid(self) -> str:
+        return str(getattr(self.cloud(), "_uuid", "") or "")
+
+    async def async_camera_action(self, action: str, prop: str, value: dict[str, Any]) -> Any:
+        """siid 10001 action with one JSON parameter, as dreame_vacuum's call_stream_action builds it.
+
+        `action`/`prop` are DreameVacuumAction / DreameVacuumProperty member names, so siid,
+        aiid and piid come from dreame_vacuum's own mapping. Returns the raw cloud result.
+        """
+        # Sent through the protocol object, not device.call_action(): the latter logs the full
+        # parameters at ERROR level on failure, which would put the PIN hash into the HA log.
+        protocol = getattr(self.device(), "_protocol", None)
+        if protocol is None or not hasattr(protocol, "action"):
+            raise BridgeError("dreame_vacuum protocol has no action()")
+        types = __import__(
+            f"custom_components.{DREAME_DOMAIN}.dreame.types",
+            fromlist=["DreameVacuumAction", "DreameVacuumProperty", "DreameVacuumActionMapping", "PIID"],
+        )
+        mapping = types.DreameVacuumActionMapping[types.DreameVacuumAction[action]]
+        piid = types.PIID(types.DreameVacuumProperty[prop])
+        params = [{"piid": piid, "value": json.dumps(value, separators=(",", ":"))}]
+        return await self.hass.async_add_executor_job(protocol.action, mapping["siid"], mapping["aiid"], params)
+
     async def async_stream_video_action(self, oper_type: str, operation: str = "monitor") -> Any:
         """Send the device-side stream status action (siid 10001 / aiid 1) like the vendor app."""
         device = self.device()

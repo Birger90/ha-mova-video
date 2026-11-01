@@ -7,11 +7,13 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
+from homeassistant.helpers import selector
 
 from .const import CONF_DREAME_ENTRY, DOMAIN, DREAME_DOMAIN
 
 CONF_HANDSHAKE = "device_handshake"
 CONF_FLV_PATH = "flv_path"
+CONF_PIN = "pin"
 DEFAULT_FLV_PATH = "ipc.flv?action=live&channel={channel}&quality=high&_crypto=on"
 
 
@@ -42,15 +44,21 @@ class MovaVideoConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class MovaVideoOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        if user_input is not None:
-            return self.async_create_entry(data=user_input)
         opts = self.config_entry.options
+        if user_input is not None:
+            # An empty PIN field keeps the stored PIN; the PIN is never shown again.
+            if not user_input.get(CONF_PIN) and opts.get(CONF_PIN):
+                user_input[CONF_PIN] = opts[CONF_PIN]
+            return self.async_create_entry(data=user_input)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_HANDSHAKE, default=opts.get(CONF_HANDSHAKE, True)): bool,
                     vol.Required(CONF_FLV_PATH, default=opts.get(CONF_FLV_PATH, DEFAULT_FLV_PATH)): str,
+                    vol.Optional(CONF_PIN): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                    ),
                 }
             ),
         )

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +34,15 @@ class VideoManager:
     launching a second worker.
     """
 
-    def __init__(self, hass: HomeAssistant, bridge: VacuumBridge, *, device_handshake: bool, flv_path: str | None = None) -> None:
+    def __init__(self, hass: HomeAssistant, bridge: VacuumBridge, *, device_handshake: bool, flv_path: str | None = None, pin: str | None = None) -> None:
         self.hass = hass
         self.bridge = bridge
         self.device_handshake = device_handshake
         self.flv_path = flv_path
+        self.pin = pin
+        self._cam_session: str | None = None
+        self._keepalive: asyncio.Task | None = None
+        self.handshake_log: list[dict[str, Any]] = []
         self.relay = FlvRelay(self._async_open_source, self._async_close_source)
         self._assets: Xp2pHostAssets | None = None
         self._session: StreamSession | None = None
@@ -155,19 +161,60 @@ class VideoManager:
                 self._set_phase("idle")
         await self._async_handshake_end()
 
-    async def _async_handshake(self, oper_type: str) -> None:
+    # Camera unlock on the robot (siid 10001). Sequence and payloads follow the MIT-licensed
+    # felixsteghofer/dreame-live-camera (manager.py): client session id, STREAM_CODE open,
+    # VIDEO_VENDOR, monitor start, on refusal PIN verify (sha256) and one retry, keep-alive
+    # every 10 s, monitor end. That project targets the Aliyun provider; for Tencent the
+    # provider-specific monitor parameters (token/channelId there) are left out - unverified.
+
+    async def _cam(self, step: str, action: str, prop: str, value: dict[str, Any]) -> Any:
         try:
-            result = await self.bridge.async_stream_video_action(oper_type)
-            if oper_type == "start":
-                self._handshake_sent = True
-            _LOGGER.debug("Stream video action %s -> %s", oper_type, (result or {}).get("code") if isinstance(result, dict) else type(result).__name__)
-        except Exception as err:  # noqa: BLE001 - best effort, unverified for this model
-            _LOGGER.debug("Stream video action %s failed: %s", oper_type, err)
+            result = await self.bridge.async_camera_action(action, prop, {**value, "session": self._cam_session})
+        except Exception as err:  # noqa: BLE001
+            self.handshake_log.append({"step": step, "error": type(err).__name__})
+            return None
+        code = result.get("code") if isinstance(result, dict) else None
+        self.handshake_log.append({"step": step, "code": code})
+        return result
+
+    @staticmethod
+    def _ok(result: Any) -> bool:
+        return isinstance(result, dict) and result.get("code") == 0
+
+    async def _async_handshake(self, oper_type: str) -> None:
+        if oper_type != "start":
+            return
+        self.handshake_log = []
+        self._cam_session = hashlib.md5(f"{self.bridge.uuid() or uuid.uuid4().hex}_{int(time.time() * 1000)}".encode()).hexdigest()
+        await self._cam("open", "STREAM_CODE", "STREAM_CODE", {"open": True})
+        await self._cam("vendor", "VIDEO_VENDOR", "STREAM_VENDOR", {})
+        monitor = {"operType": "monitor", "operation": "start"}
+        result = await self._cam("monitor_start", "STREAM_VIDEO", "STREAM_STATUS", monitor)
+        if not self._ok(result) and self.pin:
+            verified = await self._cam(
+                "pin_verify", "STREAM_CODE", "STREAM_VERIFY_CODE",
+                {"oldcode": hashlib.sha256(self.pin.encode()).hexdigest(), "lazymode": 0},
+            )
+            if self._ok(verified):
+                result = await self._cam("monitor_start_retry", "STREAM_VIDEO", "STREAM_STATUS", monitor)
+        self._handshake_sent = True
+        if self._ok(result):
+            self._keepalive = self.hass.async_create_background_task(self._async_keepalive(), f"{DOMAIN} keepalive")
+
+    async def _async_keepalive(self) -> None:
+        while True:
+            await asyncio.sleep(10)
+            await self._cam("keep_alive", "STREAM_VIDEO", "STREAM_KEEP_ALIVE", {"operType": "keep_alive", "videoStatus": "opened"})
+            del self.handshake_log[:-12]
 
     async def _async_handshake_end(self) -> None:
+        keepalive, self._keepalive = self._keepalive, None
+        if keepalive is not None:
+            keepalive.cancel()
         if self._handshake_sent:
             self._handshake_sent = False
-            await self._async_handshake("end")
+            await self._cam("monitor_end", "STREAM_VIDEO", "STREAM_STATUS", {"operType": "monitor", "operation": "end"})
+            self._cam_session = None
 
     # ---------- diagnostics ----------
 
@@ -208,6 +255,8 @@ class VideoManager:
                 result["runtime"] = {"ready": False, "error": f"{type(err).__name__}: {err}"}
         result["worker"] = self.worker_status()
         result["flv_path"] = self.flv_path or "default"
+        result["pin_configured"] = bool(self.pin)
+        result["handshake"] = list(self.handshake_log)
         result["relay"] = {
             "active": self.relay.active,
             "last_error": self.relay.last_error,

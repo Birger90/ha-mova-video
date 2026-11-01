@@ -21,6 +21,8 @@ Unterstützte Hosts: Linux aarch64 (z. B. Raspberry Pi 4/5) und x86_64.
 2. Einstellungen → Geräte & Dienste → Integration hinzufügen → **MOVA Video** → Roboter wählen.
 3. Die Kamera **Live-Video** erscheint am Gerät des Roboters.
 
+Kamera-PIN: Der Roboter gibt das Video erst nach der PIN aus der MOVA-App frei. Sie wird in den Optionen der Integration eingetragen, nur im Home-Assistant-Konfigurationseintrag gespeichert und nie angezeigt oder geloggt (an den Roboter geht nur ihr SHA-256-Hash). Ablauf der Freischaltung nach [felixsteghofer/dreame-live-camera](https://github.com/felixsteghofer/dreame-live-camera) (MIT).
+
 Prüfen ohne Video: Aktion `mova_video.diagnose` (optional `runtime: true`) zeigt, ob die Cloud die Provisionierung liefert – ohne Geheimnisse.
 
 ## Herkunft und Lizenz
