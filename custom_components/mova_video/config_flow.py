@@ -11,6 +11,8 @@ from homeassistant.core import callback
 from .const import CONF_DREAME_ENTRY, DOMAIN, DREAME_DOMAIN
 
 CONF_HANDSHAKE = "device_handshake"
+CONF_FLV_PATH = "flv_path"
+DEFAULT_FLV_PATH = "ipc.flv?action=live&channel={channel}&quality=high&_crypto=on"
 
 
 class MovaVideoConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -42,8 +44,13 @@ class MovaVideoOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(data=user_input)
-        current = self.config_entry.options.get(CONF_HANDSHAKE, True)
+        opts = self.config_entry.options
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({vol.Required(CONF_HANDSHAKE, default=current): bool}),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HANDSHAKE, default=opts.get(CONF_HANDSHAKE, True)): bool,
+                    vol.Required(CONF_FLV_PATH, default=opts.get(CONF_FLV_PATH, DEFAULT_FLV_PATH)): str,
+                }
+            ),
         )

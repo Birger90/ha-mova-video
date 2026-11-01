@@ -157,7 +157,8 @@ class FlvRelay:
 
     async def _pump_flv(self, content: aiohttp.StreamReader) -> None:
         stats = self.stats = {"bytes": 0, "tags": 0, "video": 0, "audio": 0, "script": 0,
-                              "keyframes": 0, "video_first_bytes": [], "header": None}
+                              "keyframes": 0, "video_first_bytes": [], "audio_first_bytes": [],
+                              "audio_sizes": [], "header": None}
         header = await asyncio.wait_for(content.readexactly(13), FIRST_MEDIA_TIMEOUT)
         stats["header"] = header[:9].hex()
         stats["bytes"] += 13
@@ -178,6 +179,9 @@ class FlvRelay:
                     stats["video_first_bytes"].append(body[:2].hex())
             elif tag_type == 8:
                 stats["audio"] += 1
+                if len(stats["audio_first_bytes"]) < 4 and size >= 2:
+                    stats["audio_first_bytes"].append(body[:2].hex())
+                    stats["audio_sizes"].append(size)
             elif tag_type == 18:
                 stats["script"] += 1
             keyframe = False

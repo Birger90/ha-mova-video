@@ -72,6 +72,7 @@ class StreamRequest:
     app_secret: str = ""
     did: str = ""
     channel: int = 0
+    flv_path_template: str = FLV_PATH_TEMPLATE
 
     @property
     def service_id(self) -> str:
@@ -83,7 +84,7 @@ class StreamRequest:
 
     @property
     def flv_path(self) -> str:
-        return FLV_PATH_TEMPLATE.format(channel=self.channel)
+        return self.flv_path_template.format(channel=self.channel)
 
     def sensitive(self) -> tuple[str, ...]:
         return tuple(

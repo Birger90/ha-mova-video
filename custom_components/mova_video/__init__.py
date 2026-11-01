@@ -55,7 +55,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bridge.cloud()
     except BridgeError as err:
         raise ConfigEntryNotReady(str(err)) from err
-    manager = VideoManager(hass, bridge, device_handshake=entry.options.get(CONF_HANDSHAKE, True))
+    manager = VideoManager(
+        hass,
+        bridge,
+        device_handshake=entry.options.get(CONF_HANDSHAKE, True),
+        flv_path=entry.options.get("flv_path") or None,
+    )
     await manager.async_setup()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = manager
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

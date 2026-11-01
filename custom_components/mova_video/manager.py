@@ -32,10 +32,11 @@ class VideoManager:
     launching a second worker.
     """
 
-    def __init__(self, hass: HomeAssistant, bridge: VacuumBridge, *, device_handshake: bool) -> None:
+    def __init__(self, hass: HomeAssistant, bridge: VacuumBridge, *, device_handshake: bool, flv_path: str | None = None) -> None:
         self.hass = hass
         self.bridge = bridge
         self.device_handshake = device_handshake
+        self.flv_path = flv_path
         self.relay = FlvRelay(self._async_open_source, self._async_close_source)
         self._assets: Xp2pHostAssets | None = None
         self._session: StreamSession | None = None
@@ -102,6 +103,8 @@ class VideoManager:
             self._set_phase("provisioning")
             request, report = await async_provision(self.bridge)
             self.last_report = report
+            if self.flv_path:
+                request.flv_path_template = self.flv_path
             self._redact = request.sensitive() + tuple(
                 v for v in (request.product_id, request.device_name, request.channel_id, request.did) if v
             )
@@ -204,6 +207,7 @@ class VideoManager:
             except Exception as err:  # noqa: BLE001
                 result["runtime"] = {"ready": False, "error": f"{type(err).__name__}: {err}"}
         result["worker"] = self.worker_status()
+        result["flv_path"] = self.flv_path or "default"
         result["relay"] = {
             "active": self.relay.active,
             "last_error": self.relay.last_error,
