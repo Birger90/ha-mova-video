@@ -52,6 +52,7 @@ class FlvRelay:
         self._init_done = False
         self._lock = asyncio.Lock()
         self.last_error: str | None = None
+        self.stats: dict = {}
 
     @property
     def url(self) -> str | None:
@@ -155,7 +156,11 @@ class FlvRelay:
             await self._source_closer()
 
     async def _pump_flv(self, content: aiohttp.StreamReader) -> None:
+        stats = self.stats = {"bytes": 0, "tags": 0, "video": 0, "audio": 0, "script": 0,
+                              "keyframes": 0, "video_first_bytes": [], "header": None}
         header = await asyncio.wait_for(content.readexactly(13), FIRST_MEDIA_TIMEOUT)
+        stats["header"] = header[:9].hex()
+        stats["bytes"] += 13
         if header[:3] != b"FLV":
             raise RuntimeError("Upstream is not an FLV stream")
         init = bytearray(header)
@@ -165,6 +170,16 @@ class FlvRelay:
             size = struct.unpack(">I", b"\0" + tag_header[1:4])[0]
             body = await content.readexactly(size + 4)  # data + PreviousTagSize
             tag = tag_header + body
+            stats["bytes"] += len(tag)
+            stats["tags"] += 1
+            if tag_type == 9:
+                stats["video"] += 1
+                if len(stats["video_first_bytes"]) < 6 and size >= 2:
+                    stats["video_first_bytes"].append(body[:2].hex())
+            elif tag_type == 8:
+                stats["audio"] += 1
+            elif tag_type == 18:
+                stats["script"] += 1
             keyframe = False
             if tag_type == 18 and not self._init_done:  # script/metadata
                 init.extend(tag)
@@ -176,6 +191,7 @@ class FlvRelay:
                     init.extend(tag)
                     continue
                 keyframe = frame_type == 1
+                stats["keyframes"] += keyframe
             elif tag_type == 8 and size >= 2 and (body[0] >> 4) == 10 and body[1] == 0:  # AAC config
                 if not self._init_done:
                     init.extend(tag)

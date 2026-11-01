@@ -204,6 +204,12 @@ class VideoManager:
             except Exception as err:  # noqa: BLE001
                 result["runtime"] = {"ready": False, "error": f"{type(err).__name__}: {err}"}
         result["worker"] = self.worker_status()
-        result["relay"] = {"active": self.relay.active, "last_error": self.relay.last_error}
+        result["relay"] = {
+            "active": self.relay.active,
+            "last_error": self.relay.last_error,
+            "subscribers": len(self.relay._subs),  # noqa: SLF001
+            "init_done": self.relay._init_done,  # noqa: SLF001
+            "stats": dict(self.relay.stats),
+        }
         result["last_error"] = self.last_error
         return result
