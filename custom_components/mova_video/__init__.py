@@ -43,6 +43,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         schema=vol.Schema({vol.Optional("runtime", default=False): cv.boolean}),
         supports_response=SupportsResponse.ONLY,
     )
+    async def prepare(call: ServiceCall) -> None:
+        managers: dict = hass.data.get(DOMAIN, {})
+        if not managers:
+            raise ServiceValidationError("MOVA Video is not set up")
+        for manager in managers.values():
+            manager.async_prepare()
+
+    hass.services.async_register(DOMAIN, "prepare", prepare, schema=vol.Schema({}))
     return True
 
 

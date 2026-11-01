@@ -4,7 +4,9 @@
       "user": {
         "title": "MOVA Video",
         "description": "Wähle den Roboter aus der Dreame-Vacuum-Integration.",
-        "data": { "dreame_entry_id": "Roboter" }
+        "data": {
+          "dreame_entry_id": "Roboter"
+        }
       }
     },
     "abort": {
@@ -15,20 +17,35 @@
   "options": {
     "step": {
       "init": {
-        "data": { "device_handshake": "Start-/Stopp-Befehl der App an den Roboter senden", "flv_path": "FLV-Pfad, der beim Roboter angefragt wird (Experten-Einstellung)", "pin": "Kamera-PIN (leer lassen = unverändert)" }
+        "data": {
+          "device_handshake": "Start-/Stopp-Befehl der App an den Roboter senden",
+          "flv_path": "FLV-Pfad, der beim Roboter angefragt wird (Experten-Einstellung)",
+          "pin": "Kamera-PIN (leer lassen = unverändert)"
+        }
       }
     }
   },
   "entity": {
-    "camera": { "live_video": { "name": "Live-Video" } }
+    "camera": {
+      "live_video": {
+        "name": "Live-Video"
+      }
+    }
   },
   "services": {
     "diagnose": {
       "name": "Diagnose",
       "description": "Prüft die Video-Bereitstellung in der Cloud, ohne Geheimnisse anzuzeigen.",
       "fields": {
-        "runtime": { "name": "Laufzeit vorbereiten", "description": "Auch die XP2P-Laufzeit herunterladen und prüfen." }
+        "runtime": {
+          "name": "Laufzeit vorbereiten",
+          "description": "Auch die XP2P-Laufzeit herunterladen und prüfen."
+        }
       }
+    },
+    "prepare": {
+      "name": "Live-Video vorbereiten",
+      "description": "Baut die Videoverbindung vorab auf, damit das Livebild ohne Warten öffnet. Unbenutzt wird sie nach 3 Minuten wieder getrennt."
     }
   }
 }

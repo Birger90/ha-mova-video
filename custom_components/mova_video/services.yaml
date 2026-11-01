@@ -5,3 +5,5 @@ diagnose:
       default: false
       selector:
         boolean:
+
+prepare:

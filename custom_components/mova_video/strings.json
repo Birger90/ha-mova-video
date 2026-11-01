@@ -4,7 +4,9 @@
       "user": {
         "title": "MOVA Video",
         "description": "Choose the robot from the Dreame Vacuum integration.",
-        "data": { "dreame_entry_id": "Robot" }
+        "data": {
+          "dreame_entry_id": "Robot"
+        }
       }
     },
     "abort": {
@@ -15,20 +17,35 @@
   "options": {
     "step": {
       "init": {
-        "data": { "device_handshake": "Send the app's start/stop monitor command to the robot", "flv_path": "FLV path requested from the robot (expert setting)", "pin": "Camera PIN (leave empty to keep)" }
+        "data": {
+          "device_handshake": "Send the app's start/stop monitor command to the robot",
+          "flv_path": "FLV path requested from the robot (expert setting)",
+          "pin": "Camera PIN (leave empty to keep)"
+        }
       }
     }
   },
   "entity": {
-    "camera": { "live_video": { "name": "Live video" } }
+    "camera": {
+      "live_video": {
+        "name": "Live video"
+      }
+    }
   },
   "services": {
     "diagnose": {
       "name": "Diagnose",
       "description": "Checks cloud video provisioning without revealing any secrets.",
       "fields": {
-        "runtime": { "name": "Prepare runtime", "description": "Also download and verify the XP2P runtime." }
+        "runtime": {
+          "name": "Prepare runtime",
+          "description": "Also download and verify the XP2P runtime."
+        }
       }
+    },
+    "prepare": {
+      "name": "Prepare live video",
+      "description": "Starts the video connection in advance so the live view opens without waiting. An unused connection is closed after 3 minutes."
     }
   }
 }

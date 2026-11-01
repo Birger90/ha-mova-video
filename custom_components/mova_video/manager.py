@@ -93,6 +93,22 @@ class VideoManager:
         session = await asyncio.shield(self._starting)
         return session.stream_url
 
+    def async_prepare(self) -> str:
+        """Start the worker ahead of a viewer (e.g. when the camera card is shown).
+
+        The native start takes about 35-45 s, longer than Home Assistant's 30 s stream
+        timeout. A ready worker without viewers is kept for WARM_GRACE seconds.
+        """
+        if self._session is not None and self._session.alive():
+            return "ready"
+        if self._starting is None or self._starting.done():
+            self._starting = self.hass.async_create_background_task(
+                self._async_start_worker(), f"{DOMAIN} xp2p prestart"
+            )
+            # Errors are kept in last_error; retrieve them so asyncio does not warn.
+            self._starting.add_done_callback(lambda t: t.cancelled() or t.exception())
+        return "starting"
+
     async def _async_close_source(self) -> None:
         # Called when the relay pump ends. A start that is still running keeps going so a
         # retry can use it; _async_start_worker stops it if nobody is watching by then.
